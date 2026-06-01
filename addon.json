@@ -2,7 +2,7 @@
     "id": "addon-watch-live-perms",
     "name": "Watch Live Permissions",
     "description": "Granular Watch Live permissions with team-member protection and action logging.",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "xDragon11x",
     "license": "MIT",
     "fxpanel": {
@@ -29,6 +29,16 @@
     },
     "panel": {
         "entry": "panel/index.js",
+        "pages": [
+            {
+                "path": "/multi-stream",
+                "title": "Multi-Stream",
+                "icon": "LayoutGrid",
+                "sidebar": true,
+                "sidebarGroup": "Players",
+                "component": "MultiStreamPage"
+            }
+        ],
         "widgets": [
             {
                 "slot": "player-modal.tabs",
