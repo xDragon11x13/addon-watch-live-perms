@@ -1,0 +1,40 @@
+{
+    "id": "addon-watch-live-perms",
+    "name": "Watch Live Permissions",
+    "description": "Granular Watch Live permissions with team-member protection and action logging.",
+    "version": "1.0.0",
+    "author": "xDragon11x",
+    "license": "MIT",
+    "fxpanel": {
+        "minVersion": "0.3.0-Beta"
+    },
+    "permissions": {
+        "required": [],
+        "optional": ["players.read"]
+    },
+    "adminPermissions": [
+        {
+            "id": "watch_live",
+            "label": "Watch Live",
+            "description": "Watch a player's live screen from the web panel."
+        },
+        {
+            "id": "watch_live_team",
+            "label": "Watch Live (Team)",
+            "description": "Also watch staff-tagged team members via Watch Live."
+        }
+    ],
+    "server": {
+        "entry": "server/index.js"
+    },
+    "panel": {
+        "entry": "panel/index.js",
+        "widgets": [
+            {
+                "slot": "player-modal.tabs",
+                "component": "WatchLiveTab",
+                "title": "Watch Live"
+            }
+        ]
+    }
+}
