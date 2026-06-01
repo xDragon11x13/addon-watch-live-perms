@@ -12,10 +12,9 @@ fxPanel addon that adds granular **Watch Live** permissions with team-member pro
 ## Installation
 
 1. Copy `addon-watch-live-perms` into your fxPanel `addons/` folder
-2. Replace `core/index.js` with the patched version from this repo (required for addon ↔ live spectate bridge)
-3. Restart fxPanel
-4. Open **Addons** → approve **Watch Live Permissions**
-5. Assign the new permissions under **Admin Manager → Permissions** (category: Addons)
+2. Restart fxPanel
+3. Open **Addons** → approve **Watch Live Permissions**
+4. Assign the new permissions under **Admin Manager → Permissions** (category: Addons)
 
 ## Usage
 
