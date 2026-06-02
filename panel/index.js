@@ -2,7 +2,6 @@
 const { createElement: h, useState, useEffect, useCallback, useRef, useMemo } = React;
 
 const ADDON_ID = 'addon-watch-live-perms';
-const ADDON_API = `/addons/${ADDON_ID}/api`;
 const MAX_MULTI_STREAMS = 6;
 
 const PERM_WATCH = 'addon.addon-watch-live-perms.watch_live';
@@ -118,17 +117,202 @@ function useOnlinePlayers() {
     return { players: sortedPlayers, mutex };
 }
 
-function getGridClass(count) {
-    if (count <= 1) return 'grid grid-cols-1 gap-3';
-    if (count === 2) return 'grid grid-cols-1 gap-3 xl:grid-cols-2';
-    if (count <= 4) return 'grid grid-cols-1 gap-3 md:grid-cols-2';
-    return 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3';
+function getMultiStreamGridStyle(count) {
+    if (count <= 1) return { cols: 1, rows: 1 };
+    if (count === 2) return { cols: 2, rows: 1 };
+    if (count <= 4) return { cols: 2, rows: 2 };
+    if (count <= 6) return { cols: 3, rows: 2 };
+    return { cols: 3, rows: 3 };
 }
 
-function WatchLiveStream({ sessionId, playerName, onStop, compact = false }) {
+function formatLatencyMs(lastFrameAt) {
+    if (!lastFrameAt) return null;
+    return Math.max(0, Date.now() - lastFrameAt);
+}
+
+function StreamStatusOverlay({ message, variant = 'waiting', playerName = '' }) {
+    const isWaiting = variant === 'waiting';
+    const spinnerClass = isWaiting
+        ? 'border-emerald-500/30 border-t-emerald-400'
+        : 'border-primary/40 border-t-primary';
+    const textClass = variant === 'error'
+        ? 'text-destructive'
+        : isWaiting
+            ? 'text-emerald-300'
+            : 'text-muted-foreground';
+
+    return h('div', {
+        className: 'absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black px-3 text-center',
+    },
+        h('div', { className: `size-10 animate-spin rounded-full border-[3px] ${spinnerClass}` }),
+        h('p', { className: `text-sm font-semibold ${textClass}` }, message),
+        playerName && h('p', { className: 'text-muted-foreground text-xs' }, playerName),
+    );
+}
+
+function MultiStreamTile({ sessionId, player, onStop }) {
     const [frame, setFrame] = useState(null);
     const [timedOut, setTimedOut] = useState(false);
+    const [lastFrameAt, setLastFrameAt] = useState(null);
+    const [latencyMs, setLatencyMs] = useState(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
     const cleanupRef = useRef(null);
+    const viewportRef = useRef(null);
+    const displayName = player.displayName || `Player #${player.netid}`;
+    const tags = Array.isArray(player.tags) ? player.tags : [];
+
+    useEffect(() => {
+        if (!sessionId) return undefined;
+        const timer = setTimeout(() => setTimedOut(true), 25000);
+        return () => clearTimeout(timer);
+    }, [sessionId]);
+
+    useEffect(() => {
+        if (!sessionId) return undefined;
+        const socket = getSocket();
+        if (!socket) return undefined;
+
+        socket.emit('joinSpectate', sessionId);
+        const onFrame = (payload) => {
+            if (payload?.sessionId === sessionId) {
+                setFrame(payload.frame);
+                setTimedOut(false);
+                const now = Date.now();
+                setLastFrameAt(now);
+                setLatencyMs(0);
+            }
+        };
+        socket.on('spectateFrame', onFrame);
+
+        const cleanup = () => {
+            socket.off('spectateFrame', onFrame);
+            socket.emit('leaveSpectate', sessionId);
+        };
+        cleanupRef.current = cleanup;
+        return cleanup;
+    }, [sessionId]);
+
+    useEffect(() => {
+        if (!lastFrameAt || !frame) {
+            setLatencyMs(null);
+            return undefined;
+        }
+        const timer = setInterval(() => {
+            setLatencyMs(formatLatencyMs(lastFrameAt));
+        }, 500);
+        return () => clearInterval(timer);
+    }, [lastFrameAt, frame]);
+
+    useEffect(() => {
+        const onFullscreenChange = () => {
+            setIsFullscreen(document.fullscreenElement === viewportRef.current);
+        };
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    }, []);
+
+    const handleStop = useCallback(() => {
+        if (document.fullscreenElement === viewportRef.current) {
+            document.exitFullscreen?.().catch(() => {});
+        }
+        cleanupRef.current?.();
+        cleanupRef.current = null;
+        onStop();
+    }, [onStop]);
+
+    const toggleFullscreen = useCallback(() => {
+        const el = viewportRef.current;
+        if (!el) return;
+        if (document.fullscreenElement === el) {
+            document.exitFullscreen?.().catch(() => {});
+            return;
+        }
+        el.requestFullscreen?.().catch(() => {});
+    }, []);
+
+    return h('div', { className: 'flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-zinc-950/80 shadow-sm' },
+        h('div', { className: 'flex shrink-0 items-start justify-between gap-2 border-b border-border/40 px-3 py-2' },
+            h('div', { className: 'min-w-0' },
+                h('p', { className: 'truncate text-sm font-semibold text-foreground' },
+                    `#${player.netid} ${displayName}`),
+                tags.length > 0 && h('div', { className: 'mt-1 flex flex-wrap gap-1' },
+                    tags.includes('staff') && h('span', {
+                        className: 'rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-300',
+                    }, 'Team'),
+                    tags.filter((tag) => tag !== 'staff').slice(0, 3).map((tag) => h('span', {
+                        key: tag,
+                        className: 'rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium capitalize text-sky-200',
+                    }, tag.replace(/_/g, ' '))),
+                ),
+            ),
+            h('div', { className: 'flex shrink-0 items-center gap-1.5' },
+                frame && latencyMs != null && h('span', {
+                    className: 'rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300',
+                }, `${latencyMs}ms`),
+                h('button', {
+                    type: 'button',
+                    onClick: toggleFullscreen,
+                    disabled: !frame,
+                    className: 'rounded border border-border/60 px-2 py-1 text-[10px] hover:bg-zinc-800 disabled:opacity-40',
+                    title: 'Fullscreen',
+                }, '⛶'),
+                h('button', {
+                    type: 'button',
+                    onClick: handleStop,
+                    className: 'rounded bg-destructive/90 px-2 py-1 text-[10px] font-medium text-white hover:bg-destructive',
+                }, 'Stop'),
+            ),
+        ),
+        h('div', {
+            ref: viewportRef,
+            className: 'relative min-h-0 flex-1 bg-black',
+        },
+            !frame && !timedOut && h(StreamStatusOverlay, {
+                message: 'Waiting for stream…',
+                variant: 'waiting',
+                playerName: displayName,
+            }),
+            timedOut && !frame && h(StreamStatusOverlay, {
+                message: 'No stream received.',
+                variant: 'error',
+                playerName: displayName,
+            }),
+            frame && h('img', {
+                src: frame,
+                alt: `Live stream of ${displayName}`,
+                className: 'absolute inset-0 h-full w-full object-contain',
+            }),
+            frame && h('span', {
+                className: 'absolute bottom-2 right-2 flex size-6 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-300',
+                title: 'Live',
+            }, '●'),
+            isFullscreen && h('div', {
+                className: 'absolute bottom-0 left-0 right-0 z-20 flex items-center justify-between bg-black/75 px-4 py-3',
+            },
+                h('p', { className: 'truncate text-sm text-white' }, `#${player.netid} ${displayName}`),
+                h('div', { className: 'flex gap-2' },
+                    h('button', {
+                        type: 'button',
+                        onClick: toggleFullscreen,
+                        className: 'rounded border border-white/20 px-3 py-1 text-xs text-white',
+                    }, 'Exit'),
+                    h('button', {
+                        type: 'button',
+                        onClick: handleStop,
+                        className: 'rounded bg-destructive px-3 py-1 text-xs text-white',
+                    }, 'Stop'),
+                ),
+            ),
+        ),
+    );
+}
+
+function WatchLiveStream({ sessionId, playerName, onStop, compact = false, fillCell = false }) {
+    const [frame, setFrame] = useState(null);
+    const [timedOut, setTimedOut] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const cleanupRef = useRef(null);
+    const viewportRef = useRef(null);
 
     useEffect(() => {
         if (!sessionId) return undefined;
@@ -158,7 +342,18 @@ function WatchLiveStream({ sessionId, playerName, onStop, compact = false }) {
         return cleanup;
     }, [sessionId]);
 
+    useEffect(() => {
+        const onFullscreenChange = () => {
+            setIsFullscreen(document.fullscreenElement === viewportRef.current);
+        };
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    }, []);
+
     const handleStop = useCallback(() => {
+        if (document.fullscreenElement === viewportRef.current) {
+            document.exitFullscreen?.().catch(() => {});
+        }
         cleanupRef.current?.();
         cleanupRef.current = null;
         setFrame(null);
@@ -166,53 +361,107 @@ function WatchLiveStream({ sessionId, playerName, onStop, compact = false }) {
         onStop();
     }, [onStop]);
 
-    const frameClass = compact
-        ? 'flex aspect-video min-h-[180px] items-center justify-center rounded-lg bg-zinc-950'
-        : 'flex min-h-[320px] items-center justify-center rounded-lg bg-zinc-950';
+    const toggleFullscreen = useCallback(() => {
+        const el = viewportRef.current;
+        if (!el) return;
+        if (document.fullscreenElement === el) {
+            document.exitFullscreen?.().catch(() => {});
+            return;
+        }
+        el.requestFullscreen?.().catch(() => {});
+    }, []);
 
-    const imageClass = compact
+    const outerClass = fillCell
+        ? 'flex h-full min-h-0 flex-col gap-2'
+        : compact
+            ? 'space-y-2'
+            : 'space-y-3';
+
+    const viewportClass = [
+        'relative overflow-hidden rounded-lg bg-zinc-950',
+        fillCell ? 'min-h-0 flex-1 w-full' : '',
+        compact && !fillCell ? 'aspect-video min-h-[180px]' : '',
+        !compact && !fillCell ? 'min-h-[320px]' : '',
+        isFullscreen ? 'flex h-full w-full items-center justify-center bg-black' : 'flex items-center justify-center',
+    ].filter(Boolean).join(' ');
+
+    const imageClass = isFullscreen || fillCell || compact
         ? 'h-full w-full object-contain'
         : 'max-h-[60vh] max-w-full';
 
-    return h('div', { className: compact ? 'space-y-2' : 'space-y-3' },
-        h('div', { className: 'flex items-center justify-between gap-2' },
+    const showControls = frame || isFullscreen;
+
+    return h('div', { className: outerClass },
+        !isFullscreen && h('div', { className: 'flex shrink-0 items-center justify-between gap-2' },
             h('p', {
                 className: compact
                     ? 'truncate text-xs font-medium text-foreground'
                     : 'text-sm font-medium text-foreground',
             }, `Live: ${playerName}`),
-            h('button', {
-                type: 'button',
-                onClick: handleStop,
-                className: 'shrink-0 rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90',
-            }, 'Stop'),
+            h('div', { className: 'flex shrink-0 items-center gap-1.5' },
+                h('button', {
+                    type: 'button',
+                    onClick: toggleFullscreen,
+                    disabled: !frame,
+                    title: 'Fullscreen',
+                    className: 'rounded-md border border-border bg-secondary/50 px-2.5 py-1.5 text-xs font-medium hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40',
+                }, 'Fullscreen'),
+                h('button', {
+                    type: 'button',
+                    onClick: handleStop,
+                    className: 'rounded-md bg-destructive px-2.5 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90',
+                }, 'Stop'),
+            ),
         ),
-        h('div', { className: frameClass },
-            !frame && !timedOut && h('p', { className: 'text-sm text-muted-foreground' }, 'Connecting…'),
-            timedOut && !frame && h('p', { className: 'px-4 text-center text-sm text-destructive' },
-                'Connection timed out — no frames received.'),
+        h('div', { ref: viewportRef, className: viewportClass },
+            !frame && !timedOut && h(StreamStatusOverlay, { message: 'Connecting…', variant: 'muted' }),
+            timedOut && !frame && h(StreamStatusOverlay, {
+                message: 'Connection timed out — no frames received.',
+                variant: 'error',
+            }),
             frame && h('img', {
                 src: frame,
                 alt: `Live spectate of ${playerName}`,
                 className: imageClass,
             }),
+            isFullscreen && showControls && h('div', {
+                className: 'absolute bottom-0 left-0 right-0 z-20 flex items-center justify-between gap-2 bg-black/70 px-4 py-3',
+            },
+                h('p', { className: 'truncate text-sm font-medium text-white' }, playerName),
+                h('div', { className: 'flex shrink-0 items-center gap-2' },
+                    h('button', {
+                        type: 'button',
+                        onClick: toggleFullscreen,
+                        className: 'rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/20',
+                    }, 'Exit fullscreen'),
+                    h('button', {
+                        type: 'button',
+                        onClick: handleStop,
+                        className: 'rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90',
+                    }, 'Stop'),
+                ),
+            ),
+            !isFullscreen && frame && h('button', {
+                type: 'button',
+                onClick: toggleFullscreen,
+                title: 'Fullscreen',
+                className: 'absolute right-2 top-2 z-20 rounded-md border border-white/20 bg-black/60 px-2 py-1 text-[11px] font-medium text-white hover:bg-black/80',
+            }, '⛶'),
         ),
     );
 }
 
 async function startSpectateSession(player, mutex) {
-    const tags = Array.isArray(player.tags) ? player.tags : [];
-    const response = await fetch(`${ADDON_API}/spectate/start`, {
+    const params = new URLSearchParams();
+    params.set('mutex', mutex ?? 'current');
+    params.set('netid', String(player.netid));
+    if (player.license) params.set('license', player.license);
+
+    const response = await fetch(`/player/liveSpectate/start?${params.toString()}`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getHeaders(),
-        body: JSON.stringify({
-            mutex: mutex ?? 'current',
-            netid: player.netid,
-            license: player.license,
-            tags,
-            displayName: player.displayName,
-        }),
+        body: JSON.stringify({}),
     });
     const data = await response.json();
     if (!response.ok || data.error) {
@@ -224,7 +473,7 @@ async function startSpectateSession(player, mutex) {
 async function stopSpectateSession(sessionId) {
     if (!sessionId) return;
     try {
-        await fetch(`${ADDON_API}/spectate/stop`, {
+        await fetch('/player/liveSpectate/stop', {
             method: 'POST',
             credentials: 'same-origin',
             headers: getHeaders(),
@@ -337,7 +586,7 @@ function MultiStreamPage() {
         );
     }
 
-    return h('div', { className: 'flex h-full min-h-0 flex-col gap-4 p-4 lg:flex-row' },
+    return h('div', { className: 'flex h-full min-h-[480px] flex-col gap-4 p-4 lg:flex-row lg:overflow-hidden' },
         h('div', { className: 'flex w-full shrink-0 flex-col gap-3 lg:w-80' },
             h('div', null,
                 h('h1', { className: 'text-xl font-semibold text-foreground' }, 'Multi-Stream'),
@@ -405,26 +654,38 @@ function MultiStreamPage() {
                     }),
             ),
         ),
-        h('div', { className: 'min-h-0 flex-1' },
+        h('div', { className: 'flex min-h-0 flex-1 flex-col overflow-hidden lg:min-h-[calc(100vh-6rem)]' },
             activeStreams.length === 0
                 ? h('div', {
-                    className: 'border-border/50 flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed p-6',
+                    className: 'border-border/50 flex flex-1 min-h-[320px] items-center justify-center rounded-xl border border-dashed p-6',
                 },
                     h('p', { className: 'max-w-md text-center text-sm text-muted-foreground' },
-                        'Select one or more players on the left to start watching. The layout adapts automatically to the number of active streams.'),
+                        'Wähle links Spieler aus. Je mehr Streams aktiv sind, desto kleiner werden die Kacheln im Raster.'),
                 )
-                : h('div', { className: getGridClass(activeStreams.length) },
-                    activeStreams.map((stream) => h('div', {
-                        key: stream.netid,
-                        className: 'border-border/50 rounded-xl border bg-card/40 p-3',
-                    },
-                        h(WatchLiveStream, {
+                : h('div', {
+                    className: 'grid min-h-0 flex-1 gap-2 p-1',
+                    style: (() => {
+                        const { cols, rows } = getMultiStreamGridStyle(activeStreams.length);
+                        return {
+                            height: 'calc(100vh - 7rem)',
+                            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                            gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+                        };
+                    })(),
+                },
+                    activeStreams.map((stream) => {
+                        const player = players.find((entry) => entry.netid === stream.netid) || {
+                            netid: stream.netid,
+                            displayName: stream.displayName,
+                            tags: stream.tags,
+                        };
+                        return h(MultiStreamTile, {
+                            key: stream.netid,
                             sessionId: stream.sessionId,
-                            playerName: stream.displayName,
+                            player,
                             onStop: () => stopStream(stream),
-                            compact: activeStreams.length > 1,
-                        }),
-                    )),
+                        });
+                    }),
                 ),
         ),
     );
