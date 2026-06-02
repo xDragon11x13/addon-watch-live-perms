@@ -2,7 +2,7 @@
     "id": "addon-watch-live-perms",
     "name": "Watch Live Permissions",
     "description": "Granular Watch Live permissions with team-member protection and action logging.",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "author": "xDragon11x",
     "license": "MIT",
     "fxpanel": {
